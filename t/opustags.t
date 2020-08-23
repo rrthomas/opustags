@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use utf8;
 
-use Test::More tests => 37;
+use Test::More tests => 38;
 
 use Digest::MD5;
 use File::Basename;
@@ -57,12 +57,13 @@ $version
 
 Usage: opustags --help
        opustags [OPTIONS] FILE
+       opustags [OPTIONS] -i FILE...
        opustags OPTIONS FILE -o FILE
 
 Options:
   -h, --help                    print this help
   -o, --output FILE             specify the output file
-  -i, --in-place                overwrite the input file
+  -i, --in-place                overwrite the input files
   -y, --overwrite               overwrite the output file if it already exists
   -a, --add FIELD=VALUE         add a comment
   -d, --delete FIELD[=VALUE]    delete previously existing comments
@@ -101,6 +102,7 @@ encoder=Lavc58.18.100 libopus
 EOF
 
 unlink('out.opus');
+unlink('out2.opus');
 my $previous_umask = umask(0022);
 is_deeply(opustags(qw(gobble.opus -o out.opus)), ['', '', 0], 'copy the file without changes');
 is(md5('out.opus'), '111a483596ac32352fbce4d14d16abd2', 'the copy is faithful');
@@ -207,6 +209,18 @@ my $data = slurp 'out.opus';
 is_deeply(opustags('-', '-o', '-', {in => $data, mode => ':raw'}), [$data, '', 0], 'read opus from stdin and write to stdout');
 
 unlink('out.opus');
+
+# Test --in-place
+opustags(qw(gobble.opus -o out.opus));
+opustags(qw(gobble.opus -o out2.opus));
+opustags(qw(--in-place --add FOO=bar out.opus out2.opus));
+is_deeply(opustags(qw(out.opus)), [<<'END_OUT', '', 0], 'process multiple files with --in-place');
+encoder=Lavc58.18.100 libopus
+FOO=bar
+END_OUT
+
+unlink('out.opus');
+unlink('out2.opus');
 
 ####################################################################################################
 # Test muxed streams

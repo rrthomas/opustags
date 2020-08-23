@@ -374,18 +374,15 @@ struct options {
 	 */
 	bool print_help = false;
 	/**
-	 * Path to the input file. It cannot be empty. The special "-" string means stdin.
+	 * Paths to the input and output files. They cannot be empty. The
+	 * special "-" string means stdin for input and stdout for output.
 	 *
-	 * This is the mandatory non-flagged parameter.
-	 */
-	std::string path_in;
-	/**
-	 * Optional path to output file. The special "-" string means stdout. When absent, opustags
-	 * runs in read-only mode. For in-place editing, path_out is defined equal to path_in.
+	 * At least one input file must be given. If `--in-place` is used,
+	 * more than one may be given.
 	 *
 	 * Options: --output, --in-place
 	 */
-	std::optional<std::string> path_out;
+	std::vector<std::pair<std::string, std::string>> paths_in_out;
 	/**
 	 * By default, opustags won't overwrite the output file if it already exists. This can be
 	 * forced with --overwrite. It is also enabled by --in-place.

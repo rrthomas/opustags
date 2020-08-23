@@ -23,12 +23,13 @@ R"raw(
 
 Usage: opustags --help
        opustags [OPTIONS] FILE
+       opustags [OPTIONS] -i FILE...
        opustags OPTIONS FILE -o FILE
 
 Options:
   -h, --help                    print this help
   -o, --output FILE             specify the output file
-  -i, --in-place                overwrite the input file
+  -i, --in-place                overwrite the input files
   -y, --overwrite               overwrite the output file if it already exists
   -a, --add FIELD=VALUE         add a comment
   -d, --delete FIELD[=VALUE]    delete previously existing comments
@@ -59,6 +60,7 @@ ot::status ot::parse_options(int argc, char** argv, ot::options& opt, FILE* comm
 	std::string::size_type equal;
 	ot::status rc;
 	bool set_all = false;
+	std::optional<std::string> path_out;
 	opt = {};
 	if (argc == 1)
 		return {st::bad_arguments, "No arguments specified. Use -h for help."};
@@ -71,9 +73,9 @@ ot::status ot::parse_options(int argc, char** argv, ot::options& opt, FILE* comm
 			opt.print_help = true;
 			break;
 		case 'o':
-			if (opt.path_out)
+			if (path_out)
 				return {st::bad_arguments, "Cannot specify --output more than once."};
-			opt.path_out = optarg;
+			path_out = optarg;
 			break;
 		case 'i':
 			in_place = true;
@@ -115,22 +117,24 @@ ot::status ot::parse_options(int argc, char** argv, ot::options& opt, FILE* comm
 	}
 	if (opt.print_help)
 		return st::ok;
-	if (optind != argc - 1)
-		return {st::bad_arguments, "Exactly one input file must be specified."};
-	opt.path_in = argv[optind];
-	if (opt.path_in.empty())
-		return {st::bad_arguments, "Input file path cannot be empty."};
 	if (in_place) {
-		if (opt.path_out)
+		if (path_out)
 			return {st::bad_arguments, "Cannot combine --in-place and --output."};
-		if (opt.path_in == "-")
-			return {st::bad_arguments, "Cannot modify standard input in place."};
-		opt.path_out = opt.path_in;
 		opt.overwrite = true;
+		for (int i = optind; i < argc; i++) {
+			if (strcmp(argv[i], "-") == 0)
+				return {st::bad_arguments, "Cannot modify standard input in place."};
+			opt.paths_in_out.emplace_back(std::pair<std::string, std::string>(argv[i], argv[i]));
+		}
+	} else {
+		if (optind != argc - 1)
+			return {st::bad_arguments, "Exactly one input file must be specified."};
+		if (set_all && strcmp(argv[optind], "-") == 0)
+			return {st::bad_arguments,
+				"Cannot use standard input as input file when --set-all is specified."};
+		opt.paths_in_out.emplace_back(std::pair<std::string, std::string>(argv[optind],
+										  path_out ? path_out.value() : ""));
 	}
-	if (opt.path_in == "-" && set_all)
-		return {st::bad_arguments,
-		        "Cannot use standard input as input file when --set-all is specified."};
 	if (set_all) {
 		// Read comments from stdin and prepend them to opt.to_add.
 		std::vector<std::string> comments;
@@ -319,23 +323,19 @@ static ot::status process(ot::ogg_reader& reader, ot::ogg_writer* writer, const 
 	return ot::st::ok;
 }
 
-ot::status ot::run(const ot::options& opt)
+static ot::status run_single(const ot::options& opt, const std::string& path_in, const std::string& path_out)
 {
-	if (opt.print_help) {
-		fputs(help_message, stdout);
-		return st::ok;
-	}
-
+	ot::status rc = ot::st::ok;
 	ot::file input;
-	if (opt.path_in == "-")
+	if (path_in == "-")
 		input = stdin;
-	else if ((input = fopen(opt.path_in.c_str(), "r")) == nullptr)
+	else if ((input = fopen(path_in.c_str(), "r")) == nullptr)
 		return {ot::st::standard_error,
-		        "Could not open '" + opt.path_in + "' for reading: " + strerror(errno)};
+			"Could not open '" + path_in + "' for reading: " + strerror(errno)};
 	ot::ogg_reader reader(input.get());
 
 	/* Read-only mode. */
-	if (!opt.path_out)
+	if (path_out.empty())
 		return process(reader, nullptr, opt);
 
 	/* Read-write mode.
@@ -361,32 +361,31 @@ ot::status ot::run(const ot::options& opt)
 	ot::partial_file temporary_output;
 	ot::file final_output;
 
-	ot::status rc = ot::st::ok;
 	struct stat output_info;
-	if (opt.path_out == "-") {
+	if (path_out == "-") {
 		output = stdout;
-	} else if (stat(opt.path_out->c_str(), &output_info) == 0) {
+	} else if (stat(path_out.c_str(), &output_info) == 0) {
 		/* The output file exists. */
 		if (!S_ISREG(output_info.st_mode)) {
 			/* Special files are opened for writing directly. */
-			if ((final_output = fopen(opt.path_out->c_str(), "w")) == nullptr)
+			if ((final_output = fopen(path_out.c_str(), "w")) == nullptr)
 				rc = {ot::st::standard_error,
-				      "Could not open '" + opt.path_out.value() + "' for writing: " +
+				      "Could not open '" + path_out + "' for writing: " +
 				      strerror(errno)};
 			output = final_output.get();
 		} else if (opt.overwrite) {
-			rc = temporary_output.open(opt.path_out->c_str());
+			rc = temporary_output.open(path_out.c_str());
 			output = temporary_output.get();
 		} else {
 			rc = {ot::st::error,
-			      "'" + opt.path_out.value() + "' already exists. Use -y to overwrite."};
+			      "'" + path_out + "' already exists. Use -y to overwrite."};
 		}
 	} else if (errno == ENOENT) {
-		rc = temporary_output.open(opt.path_out->c_str());
+		rc = temporary_output.open(path_out.c_str());
 		output = temporary_output.get();
 	} else {
 		rc = {ot::st::error,
-		      "Could not identify '" + opt.path_in + "': " + strerror(errno)};
+		      "Could not identify '" + path_in + "': " + strerror(errno)};
 	}
 	if (rc != ot::st::ok)
 		return rc;
@@ -395,6 +394,25 @@ ot::status ot::run(const ot::options& opt)
 	rc = process(reader, &writer, opt);
 	if (rc == ot::st::ok)
 		rc = temporary_output.commit();
-
 	return rc;
+}
+
+ot::status ot::run(const ot::options& opt)
+{
+	if (opt.print_help) {
+		fputs(help_message, stdout);
+		return st::ok;
+	}
+
+	ot::status global_rc = st::ok;
+	for (const auto& [path_in, path_out] : opt.paths_in_out) {
+		ot::status rc = run_single(opt, path_in, path_out);
+		if (global_rc == st::ok)
+			global_rc = rc;
+		else if (!rc.message.empty())
+			/* Report errors other than the one returned. */
+			fprintf(stderr, "error: %s\n", rc.message.c_str());
+	}
+
+	return global_rc;
 }
